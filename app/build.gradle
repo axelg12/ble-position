@@ -26,5 +26,13 @@ dependencies {
     })
     compile 'com.android.support:appcompat-v7:24.2.1'
     compile 'com.google.android.gms:play-services:9.6.1'
+    compile 'com.google.code.gson:gson:2.4'
+    compile 'com.mapspeople.mapsindoors:mapsindoorssdk:1.7.2@aar'
+    compile 'com.kontaktio:sdk:3.2.3'
     testCompile 'junit:junit:4.12'
+}
+repositories{
+    maven {
+        url 'http://maven.mapsindoors.com/'
+    }
 }
