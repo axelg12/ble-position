@@ -54,6 +54,15 @@ import com.kontakt.sdk.android.common.profile.IEddystoneNamespace;
 import com.mapspeople.mapcontrol.MapControl;
 import com.mapspeople.models.Point;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+
 public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, GoogleMap.OnMyLocationButtonClickListener, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener {
 
     private GoogleMap mMap;
@@ -64,7 +73,9 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private GoogleApiClient googleAPI;
     private ProximityManager proximityManager;
     SupportMapFragment mapFragment;
-
+    private float bestPos = 0;
+    HashMap<String, JSONObject> m_li = new HashMap<String, JSONObject>();
+    // ArrayList<HashMap<String, JSONObject>> formList = new ArrayList<HashMap<String, JSONObject>>();
     /**
      * Flag indicating whether a requested permission has been denied after returning in
      */
@@ -84,10 +95,13 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 .findFragmentById(R.id.map);
         mapFragment.getMapAsync(this);
         initGoogleAPI();
-        KontaktSDK.initialize(this);
+        KontaktSDK.initialize("qNTrzuKEryBCJMYyuBqGNLAbsKNXArAm");
 
         proximityManager = ProximityManagerFactory.create(this);
         proximityManager.setIBeaconListener(createIBeaconListener());
+
+        fetchJSONData d = new fetchJSONData();
+        d.start();
     }
 
     private void startScanning() {
@@ -233,9 +247,49 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         return new SimpleIBeaconListener() {
             @Override
             public void onIBeaconDiscovered(IBeaconDevice ibeacon, IBeaconRegion region) {
-                Log.i("Sample", "IBeacon discovered: " + ibeacon.toString());
+                if (bestPos == 0 || ibeacon.getRssi() >= bestPos) {
+                    bestPos = ibeacon.getRssi();
+                    // TODO
+                    String UUID = ibeacon.getUniqueId();
+                    JSONObject temp = m_li.get(UUID);
+                    JSONArray coords = null;
+                    try {
+                        if (temp != null && temp.has("coord")) {
+                            coords = temp.getJSONArray("coord");
+                            coords = coords.getJSONArray(0);
+                            double lat = 0;
+                            double lng = 0;
+                            for (int i = 0; i < coords.length(); i++) {
+                                lat += coords.getJSONArray(i).getDouble(0);
+                                lng += coords.getJSONArray(i).getDouble(1);
+                            }
+                            lat = lat / coords.length();
+                            lng = lng / coords.length();
+                            updateCam(lat, lng, temp.getString("room"), temp.getInt("level"));
+                        }
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                    }
+                }
+                Log.i("IBeacon", "IBeacon discovered with dist: " + ibeacon.getDistance());
+                Log.i("IBeacon", "IBeacon prox: " + ibeacon.getProximity());
+                Log.i("IBeacon", "IBeacon prox: " + ibeacon.getProfile());
+                Log.i("IBeacon", "IBeacon discovered: " + ibeacon.toString());
             }
         };
+    }
+
+
+    private void updateCam(double lat, double lng, String room, int level) {
+        LatLng latLng = new LatLng(lng, lat);
+        CameraUpdate cameraUpdate = CameraUpdateFactory.newLatLngZoom(latLng, 20);
+        Toast.makeText(this, "You are in room " + room, Toast.LENGTH_SHORT).show();
+        Point p = new Point(lat, lng);
+        myMapControl.setCurrentPosition(p, level);
+        mMap.addMarker(new MarkerOptions()
+                .position(latLng)
+                .title("User"));
+        mMap.moveCamera(cameraUpdate);
     }
 
     private EddystoneListener createEddystoneListener() {
@@ -246,4 +300,58 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             }
         };
     }
+
+    public String loadJSONFromAsset(String fileName) {
+        String json = null;
+        try {
+            InputStream is = getAssets().open(fileName);
+            int size = is.available();
+            byte[] buffer = new byte[size];
+            is.read(buffer);
+            is.close();
+            json = new String(buffer, "UTF-8");
+        } catch (IOException ex) {
+            ex.printStackTrace();
+            return null;
+        }
+        return json;
+    }
+
+    public class fetchJSONData extends Thread {
+        public void run(){
+            try {
+                JSONObject ou44 = new JSONObject(loadJSONFromAsset("ou44_geometry.geojson"));
+                JSONObject beacons = new JSONObject(loadJSONFromAsset("beacons.json"));
+                JSONArray m_jArry = beacons.getJSONArray("beacons");
+                for (int i = 0; i < m_jArry.length(); i++) {
+                    JSONObject jo_inside = m_jArry.getJSONObject(i);
+                    String alias = jo_inside.getString("alias");
+                    String room = jo_inside.getString("room");
+                    char level = jo_inside.getString("level").charAt(0);
+                    JSONArray ou44Arr = ou44.getJSONArray("features");
+                    for (int j = 0; j < ou44Arr.length(); j++) {
+                        JSONObject foo = ou44Arr.getJSONObject(j).getJSONObject("properties");
+                        if (foo.has("RoomId")) {
+                            String roomId = foo.getString("RoomId");
+                            if (roomId.equalsIgnoreCase(room)) {
+                                JSONArray coord = ou44Arr.getJSONObject(j).getJSONObject("geometry").getJSONArray("coordinates");
+                                JSONObject item = new JSONObject();
+                                item.put("coord", coord);
+                                item.put("level", level);
+                                item.put("alias", alias);
+                                item.put("room", room);
+                                m_li.put(alias, item);
+                                // formList.add(m_li);
+                                Log.d(TAG, "onCreate: Added");
+                            }
+                        }
+                    }
+                }
+
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+    }
 }
+
