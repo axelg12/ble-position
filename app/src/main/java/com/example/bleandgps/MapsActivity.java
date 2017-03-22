@@ -37,6 +37,7 @@ import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.MapStyleOptions;
 import com.kontakt.sdk.android.ble.connection.OnServiceReadyListener;
@@ -46,6 +47,7 @@ import com.kontakt.sdk.android.ble.manager.listeners.EddystoneListener;
 import com.kontakt.sdk.android.ble.manager.listeners.IBeaconListener;
 import com.kontakt.sdk.android.ble.manager.listeners.simple.SimpleEddystoneListener;
 import com.kontakt.sdk.android.ble.manager.listeners.simple.SimpleIBeaconListener;
+import com.kontakt.sdk.android.ble.manager.listeners.simple.SimpleScanStatusListener;
 import com.kontakt.sdk.android.common.KontaktSDK;
 import com.kontakt.sdk.android.common.profile.IBeaconDevice;
 import com.kontakt.sdk.android.common.profile.IBeaconRegion;
@@ -62,6 +64,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 
 public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, GoogleMap.OnMyLocationButtonClickListener, GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener {
 
@@ -73,9 +76,9 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private GoogleApiClient googleAPI;
     private ProximityManager proximityManager;
     SupportMapFragment mapFragment;
-    private float bestPos = 0;
+    private IBeaconDevice bestDevice;
     HashMap<String, JSONObject> m_li = new HashMap<String, JSONObject>();
-    // ArrayList<HashMap<String, JSONObject>> formList = new ArrayList<HashMap<String, JSONObject>>();
+    Marker m;
     /**
      * Flag indicating whether a requested permission has been denied after returning in
      */
@@ -98,6 +101,17 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         KontaktSDK.initialize("qNTrzuKEryBCJMYyuBqGNLAbsKNXArAm");
 
         proximityManager = ProximityManagerFactory.create(this);
+        proximityManager.setScanStatusListener(new SimpleScanStatusListener() {
+            @Override
+            public void onScanStart() {
+                Log.d("BEACON", "onScanStart: ");
+            }
+
+            @Override
+            public void onScanStop() {
+                Log.d("BEACON", "onScaneEND: ");
+            }
+        });
         proximityManager.setIBeaconListener(createIBeaconListener());
 
         fetchJSONData d = new fetchJSONData();
@@ -213,6 +227,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     public void onStop() {
         super.onStop();
+        proximityManager.stopScanning();
         googleAPI.disconnect();
     }
 
@@ -243,38 +258,58 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
     }
 
+    private void findRoomInfo(IBeaconDevice ibeacon) {
+        String UUID = ibeacon.getUniqueId();
+        JSONObject temp = m_li.get(UUID);
+        JSONArray coords = null;
+        try {
+            if (temp != null && temp.has("coord")) {
+                coords = temp.getJSONArray("coord");
+                coords = coords.getJSONArray(0);
+                double lat = 0;
+                double lng = 0;
+                for (int i = 0; i < coords.length(); i++) {
+                    lat += coords.getJSONArray(i).getDouble(0);
+                    lng += coords.getJSONArray(i).getDouble(1);
+                }
+                lat = lat / coords.length();
+                lng = lng / coords.length();
+                updateCam(lat, lng, temp.getString("room"), temp.getInt("level"));
+            }
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
     private IBeaconListener createIBeaconListener() {
         return new SimpleIBeaconListener() {
             @Override
             public void onIBeaconDiscovered(IBeaconDevice ibeacon, IBeaconRegion region) {
-                if (bestPos == 0 || ibeacon.getRssi() >= bestPos) {
-                    bestPos = ibeacon.getRssi();
-                    // TODO
-                    String UUID = ibeacon.getUniqueId();
-                    JSONObject temp = m_li.get(UUID);
-                    JSONArray coords = null;
-                    try {
-                        if (temp != null && temp.has("coord")) {
-                            coords = temp.getJSONArray("coord");
-                            coords = coords.getJSONArray(0);
-                            double lat = 0;
-                            double lng = 0;
-                            for (int i = 0; i < coords.length(); i++) {
-                                lat += coords.getJSONArray(i).getDouble(0);
-                                lng += coords.getJSONArray(i).getDouble(1);
-                            }
-                            lat = lat / coords.length();
-                            lng = lng / coords.length();
-                            updateCam(lat, lng, temp.getString("room"), temp.getInt("level"));
-                        }
-                    } catch (JSONException e) {
-                        e.printStackTrace();
-                    }
+                if (bestDevice == null || ibeacon.getRssi() >= bestDevice.getRssi()) {
+                    bestDevice = ibeacon;
+                    findRoomInfo(ibeacon);
                 }
                 Log.i("IBeacon", "IBeacon discovered with dist: " + ibeacon.getDistance());
                 Log.i("IBeacon", "IBeacon prox: " + ibeacon.getProximity());
                 Log.i("IBeacon", "IBeacon prox: " + ibeacon.getProfile());
                 Log.i("IBeacon", "IBeacon discovered: " + ibeacon.toString());
+            }
+
+            @Override
+            public void onIBeaconsUpdated(List<IBeaconDevice> iBeacons, IBeaconRegion region) {
+                for (IBeaconDevice element : iBeacons) {
+                    if (element.getRssi() <= bestDevice.getRssi()) {
+                        bestDevice = element;
+                        findRoomInfo(bestDevice);
+                    }
+                }
+            }
+
+            @Override
+            public void onIBeaconLost(IBeaconDevice iBeacon, IBeaconRegion region) {
+                if (iBeacon.getUniqueId() == bestDevice.getUniqueId()) {
+                    bestDevice = null;
+                }
             }
         };
     }
@@ -286,19 +321,14 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         Toast.makeText(this, "You are in room " + room, Toast.LENGTH_SHORT).show();
         Point p = new Point(lat, lng);
         myMapControl.setCurrentPosition(p, level);
-        mMap.addMarker(new MarkerOptions()
-                .position(latLng)
-                .title("User"));
+        if (m == null) {
+            m = mMap.addMarker(new MarkerOptions()
+                    .position(latLng)
+                    .title("User"));
+        } else {
+            m.setPosition(latLng);
+        }
         mMap.moveCamera(cameraUpdate);
-    }
-
-    private EddystoneListener createEddystoneListener() {
-        return new SimpleEddystoneListener() {
-            @Override
-            public void onEddystoneDiscovered(IEddystoneDevice eddystone, IEddystoneNamespace namespace) {
-                Log.i("Sample", "Eddystone discovered: " + eddystone.toString());
-            }
-        };
     }
 
     public String loadJSONFromAsset(String fileName) {
