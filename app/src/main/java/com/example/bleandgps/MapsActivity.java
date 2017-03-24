@@ -1,33 +1,20 @@
 package com.example.bleandgps;
 
-import android.*;
 import android.Manifest;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothManager;
-import android.content.Context;
 import android.content.pm.PackageManager;
-import android.content.res.Resources;
 import android.location.Location;
-import android.location.LocationManager;
-import android.net.Uri;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
 import android.os.Bundle;
 import android.support.v4.content.ContextCompat;
-import android.support.v4.content.PermissionChecker;
 import android.util.Log;
 import android.widget.Toast;
 
 import com.example.bleandgps.PermissionUtils.PermissionUtils;
-import com.google.android.gms.appindexing.Action;
-import com.google.android.gms.appindexing.AppIndex;
-import com.google.android.gms.appindexing.Thing;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
-
-import android.location.LocationListener;
 
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdate;
@@ -35,24 +22,18 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
-import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
-import com.google.android.gms.maps.model.MapStyleOptions;
 import com.kontakt.sdk.android.ble.connection.OnServiceReadyListener;
 import com.kontakt.sdk.android.ble.manager.ProximityManager;
 import com.kontakt.sdk.android.ble.manager.ProximityManagerFactory;
-import com.kontakt.sdk.android.ble.manager.listeners.EddystoneListener;
 import com.kontakt.sdk.android.ble.manager.listeners.IBeaconListener;
-import com.kontakt.sdk.android.ble.manager.listeners.simple.SimpleEddystoneListener;
 import com.kontakt.sdk.android.ble.manager.listeners.simple.SimpleIBeaconListener;
 import com.kontakt.sdk.android.ble.manager.listeners.simple.SimpleScanStatusListener;
 import com.kontakt.sdk.android.common.KontaktSDK;
 import com.kontakt.sdk.android.common.profile.IBeaconDevice;
 import com.kontakt.sdk.android.common.profile.IBeaconRegion;
-import com.kontakt.sdk.android.common.profile.IEddystoneDevice;
-import com.kontakt.sdk.android.common.profile.IEddystoneNamespace;
 import com.mapspeople.mapcontrol.MapControl;
 import com.mapspeople.models.Point;
 
@@ -76,7 +57,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     private GoogleApiClient googleAPI;
     private ProximityManager proximityManager;
     SupportMapFragment mapFragment;
-    private IBeaconDevice bestDevice;
+    private ArrayList<IBeaconDevice> deviceArrayList = new ArrayList<IBeaconDevice>();
     HashMap<String, JSONObject> m_li = new HashMap<String, JSONObject>();
     Marker m;
     /**
@@ -134,8 +115,8 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         mMap.setOnMyLocationButtonClickListener(this);
         enableMyLocation();
+        // Indoor maps
         myMapControl = new MapControl(this, mapFragment);
-        // myMapControl.setOnDataReadyListener(this);
         myMapControl.initMap("55cdde212a91e0049824fe86", "sdu");
     }
 
@@ -182,30 +163,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
     }
 
-    /**
-     * Displays a dialog with error message explaining that the location permission is missing.
-     */
-    private void showMissingPermissionError() {
-        PermissionUtils.PermissionDeniedDialog
-                .newInstance(true).show(getSupportFragmentManager(), "dialog");
-    }
-
-    /**
-     * ATTENTION: This was auto-generated to implement the App Indexing API.
-     * See https://g.co/AppIndexing/AndroidStudio for more information.
-     */
-    public Action getIndexApiAction() {
-        Thing object = new Thing.Builder()
-                .setName("Maps Page") // TODO: Define a title for the content shown.
-                // TODO: Make sure this auto-generated URL is correct.
-                .setUrl(Uri.parse("http://[ENTER-YOUR-URL-ERE]"))
-                .build();
-        return new Action.Builder(Action.TYPE_VIEW)
-                .setObject(object)
-                .setActionStatus(Action.STATUS_TYPE_COMPLETED)
-                .build();
-    }
-
     private void initGoogleAPI() {
         Log.d(TAG, "initGoogleAPI: " + googleAPI);
         if (googleAPI != null) return;
@@ -234,7 +191,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
     @Override
     public void onConnected(@Nullable Bundle bundle) {
-        Log.d(TAG, "heresss: ");
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -281,18 +237,61 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
     }
 
+    private void calculateCentroidLocation() {
+        double lat = 0;
+        double lng = 0;
+        int count = 0;
+        int level = 0;
+        // RSSi goes from 0 (best) to -120
+        int bestRSSI = -130;
+        for (IBeaconDevice element : deviceArrayList) {
+            String UUID = element.getUniqueId();
+            JSONObject temp = m_li.get(UUID);
+            JSONArray coords;
+            try {
+                if (temp != null && temp.has("coord")) {
+                    double latTemp = 0;
+                    double lngTemp = 0;
+                    // Let the best RSSi signal determine the floor
+                    if (element.getRssi() > bestRSSI) {
+                        level = temp.getInt("level");
+                    }
+                    count += 1;
+                    coords = temp.getJSONArray("coord");
+                    coords = coords.getJSONArray(0);
+                    for (int i = 0; i < coords.length(); i++) {
+                        latTemp += coords.getJSONArray(i).getDouble(0);
+                        lngTemp += coords.getJSONArray(i).getDouble(1);
+                    }
+                    latTemp = latTemp / coords.length();
+                    lngTemp = lngTemp / coords.length();
+                    lat += latTemp;
+                    lng += lngTemp;
+                }
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
+        }
+
+        if (lat != 0 && lng != 0) {
+             lat = lat / count;
+            lng = lng / count;
+            updateCam(lat, lng, level);
+        }
+
+    }
+
+
     private IBeaconListener createIBeaconListener() {
         return new SimpleIBeaconListener() {
+            /*
+            Code from the snapping test
             @Override
             public void onIBeaconDiscovered(IBeaconDevice ibeacon, IBeaconRegion region) {
                 if (bestDevice == null || ibeacon.getRssi() >= bestDevice.getRssi()) {
                     bestDevice = ibeacon;
                     findRoomInfo(ibeacon);
                 }
-                Log.i("IBeacon", "IBeacon discovered with dist: " + ibeacon.getDistance());
-                Log.i("IBeacon", "IBeacon prox: " + ibeacon.getProximity());
-                Log.i("IBeacon", "IBeacon prox: " + ibeacon.getProfile());
-                Log.i("IBeacon", "IBeacon discovered: " + ibeacon.toString());
             }
 
             @Override
@@ -311,6 +310,26 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                     bestDevice = null;
                 }
             }
+            */
+            @Override
+            public void onIBeaconDiscovered(IBeaconDevice ibeacon, IBeaconRegion region) {
+                deviceArrayList.add(ibeacon);
+                calculateCentroidLocation();
+            }
+
+            @Override
+            public void onIBeaconsUpdated(List<IBeaconDevice> iBeacons, IBeaconRegion region) {
+                deviceArrayList.removeAll(iBeacons);
+                deviceArrayList.addAll(iBeacons);
+                calculateCentroidLocation();
+            }
+
+            @Override
+            public void onIBeaconLost(IBeaconDevice iBeacon, IBeaconRegion region) {
+                deviceArrayList.remove(iBeacon);
+                calculateCentroidLocation();
+
+            }
         };
     }
 
@@ -319,6 +338,21 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         LatLng latLng = new LatLng(lng, lat);
         CameraUpdate cameraUpdate = CameraUpdateFactory.newLatLngZoom(latLng, 20);
         Toast.makeText(this, "You are in room " + room, Toast.LENGTH_SHORT).show();
+        Point p = new Point(lat, lng);
+        myMapControl.setCurrentPosition(p, level);
+        if (m == null) {
+            m = mMap.addMarker(new MarkerOptions()
+                    .position(latLng)
+                    .title("User"));
+        } else {
+            m.setPosition(latLng);
+        }
+        mMap.moveCamera(cameraUpdate);
+    }
+
+    private void updateCam(double lat, double lng, int level) {
+        LatLng latLng = new LatLng(lng, lat);
+        CameraUpdate cameraUpdate = CameraUpdateFactory.newLatLngZoom(latLng, 18);
         Point p = new Point(lat, lng);
         myMapControl.setCurrentPosition(p, level);
         if (m == null) {
@@ -371,8 +405,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                                 item.put("alias", alias);
                                 item.put("room", room);
                                 m_li.put(alias, item);
-                                // formList.add(m_li);
-                                Log.d(TAG, "onCreate: Added");
                             }
                         }
                     }
